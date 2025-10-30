@@ -6,101 +6,77 @@ import pandas as pd
 import time
 from datetime import datetime
 from webdriver_manager.chrome import ChromeDriverManager
+from fake_useragent import UserAgent
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# keep fake_useragent usage but fail gracefully
-try:
-    from fake_useragent import UserAgent
-except Exception:
-    UserAgent = None
+# Set up Selenium options
+options = Options()
+options.add_argument("--headless")  # Enable headless mode for GitHub Actions
+options.add_argument("--disable-gpu")
+options.add_argument("--window-size=1920,1080")
 
-def build_user_agent():
-    if UserAgent:
-        try:
-            ua = UserAgent()
-            return ua.random
-        except Exception:
-            pass
-    # fallback UA
-    return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+# Rotate User-Agent to prevent detection
+ua = UserAgent()
+options.add_argument(f"user-agent={ua.random}")
 
-def create_driver(headless=True):
-    options = Options()
-    if headless:
-        # use the legacy headless flag for maximum compatibility with sites
-        options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument(f"user-agent={build_user_agent()}")
-    # Helpful flags for CI / limited environments
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    return driver
+# Set up ChromeDriver using webdriver_manager
+service = Service(ChromeDriverManager().install())
+driver = webdriver.Chrome(service=service, options=options)
 
 # Define the target website (CoinMarketCap Bitcoin page)
 URL = "https://coinmarketcap.com/currencies/bitcoin/"
 
-def safe_find_text(driver, by, locator):
-    """Return text of first matching element or 'N/A' if not present."""
-    try:
-        el = driver.find_element(by, locator)
-        return el.text.strip()
-    except Exception:
-        return "N/A"
-
-def scrape_bitcoin_data(driver):
-    """Scrape Bitcoin details from CoinMarketCap (keeps the same selectors and outputs)."""
+def scrape_bitcoin_data():
+    """Scrape Bitcoin details from CoinMarketCap."""
     driver.get(URL)
-
-    # keep the original full pause to preserve identical DOM timing/structure
-    time.sleep(10)
+    time.sleep(10)  # Allow time for elements to load
 
     try:
-        # Extract Bitcoin Price (same locator as original)
-        price = safe_find_text(driver, By.XPATH, '//span[@data-test="text-cdp-price-display"]')
+        # Extract Bitcoin Price
+        price = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, '//span[@data-test="text-cdp-price-display"]'))
+        ).text
 
-        # Extract Market Cap (same locator as original)
-        market_cap = safe_find_text(driver, By.XPATH,
-                                    "//dt[.//div[contains(text(),'Market cap')]]/following-sibling::dd//span")
+        # Extract Market Cap
+        market_cap = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//dt[.//div[contains(text(),'Market cap')]]/following-sibling::dd//span")
+            )
+        ).text
 
-        # Extract 24h Trading Volume (same locator as original)
-        volume_24h = safe_find_text(driver, By.XPATH,
-                                    "//dt[.//div[contains(text(),'Volume (24h')]]/following-sibling::dd//span")
+        # Extract 24h Trading Volume
+        volume_24h = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//dt[.//div[contains(text(),'Volume (24h')]]/following-sibling::dd//span")
+            )
+        ).text
 
-        # Extract Circulating Supply (same locator as original)
-        circulating_supply = safe_find_text(driver, By.XPATH,
-                                           "//dt[.//div[contains(text(),'Circulating supply')]]/following-sibling::dd//span")
+        # Extract Circulating Supply
+        circulating_supply = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//dt[.//div[contains(text(),'Circulating supply')]]/following-sibling::dd//span")
+            )
+        ).text
 
-        # Extract 24h Price Change (same locator as original)
-        price_change_24h = safe_find_text(driver, By.XPATH, "//p[contains(@class, 'change-text')]")
+        # Extract 24h Price Change
+        price_change_24h = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, "//p[contains(@class, 'change-text')]") )
+        ).text
 
-        # Extract Community Sentiment using the original find_elements calls (keeps original behavior)
-        try:
-            bullish_sentiment_elems = driver.find_elements(By.XPATH,
-                "//span[contains(@class, 'sc-65e7f566-0 cOjBdO') and contains(@class, 'ratio')]")
-            bearish_sentiment_elems = driver.find_elements(By.XPATH,
-                "//span[contains(@class, 'sc-65e7f566-0 iKkbth') and contains(@class, 'ratio')]")
+        # Extract Community Sentiment
+        bullish_sentiment_elems = driver.find_elements(By.XPATH,
+                                                       "//span[contains(@class, 'sc-65e7f566-0 cOjBdO') and contains(@class, 'ratio')]")
+        bearish_sentiment_elems = driver.find_elements(By.XPATH,
+                                                       "//span[contains(@class, 'sc-65e7f566-0 iKkbth') and contains(@class, 'ratio')]")
 
-            bullish = bullish_sentiment_elems[0].text if bullish_sentiment_elems else "N/A"
-            bearish = bearish_sentiment_elems[0].text if bearish_sentiment_elems else "N/A"
-        except Exception:
-            # fallback: try locating any percentage-like spans nearby the Community Sentiment heading
-            bullish = "N/A"
-            bearish = "N/A"
-            try:
-                elems = driver.find_elements(By.XPATH,
-                    "//div[contains(., 'Community Sentiment')]//span[contains(., '%')]")
-                if len(elems) >= 1:
-                    bullish = elems[0].text.strip()
-                if len(elems) >= 2:
-                    bearish = elems[1].text.strip()
-            except Exception:
-                pass
+        bullish = bullish_sentiment_elems[0].text if bullish_sentiment_elems else "N/A"
+        bearish = bearish_sentiment_elems[0].text if bearish_sentiment_elems else "N/A"
 
-        # Capture timestamp (same format)
+        # Capture timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Store the data in a dictionary
         bitcoin_data = {
             "timestamp": timestamp,
             "price": price,
@@ -115,12 +91,11 @@ def scrape_bitcoin_data(driver):
         return bitcoin_data
 
     except Exception as e:
-        # keep the same print behaviour for parity with your original script
         print("Error occurred:", e)
         return None
 
 def save_to_csv(data):
-    """Save scraped data to CSV (identical behavior to your original script)."""
+    """Save scraped data to CSV."""
     file_name = "bitcoin_hourly_data.csv"
     try:
         df = pd.read_csv(file_name)
@@ -130,14 +105,18 @@ def save_to_csv(data):
             "circulating_supply", "price_change_24h", "bullish_sentiment", "bearish_sentiment"
         ])
 
+    # Create a DataFrame for the new data row
     new_row = pd.DataFrame([data])
+
+    # Concatenate the new row to the existing DataFrame
     df = pd.concat([df, new_row], ignore_index=True)
+
+    # Save back to CSV
     df.to_csv(file_name, index=False)
 
 if __name__ == "__main__":
-    driver = create_driver(headless=True)
     print("Scraping Bitcoin Data...")
-    scraped_data = scrape_bitcoin_data(driver)
+    scraped_data = scrape_bitcoin_data()
 
     if scraped_data:
         save_to_csv(scraped_data)
